@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.config import settings  # noqa: F401 – UPLOAD_MAX_SIZE_MB
 from app.database import get_db
 from app.models.db import DocumentDomainMap, KnowledgeDomain, MicroModule, SourceDocument
 from app.models.schemas import DocumentResponse, DocumentListResponse, DocumentUploadResponse
@@ -90,13 +90,8 @@ async def upload_document(
     resp_upload_timestamp = doc.upload_timestamp
     domain_ids_list = list(set(ids))
 
-    if settings.DEV_MODE:
-        # ⑥ 開發模式：同步在 API 直接呼叫 LLM（不需要 Redis / Celery）
-        await _shred_sync(db, doc.doc_id, doc.raw_text or "", [d.domain_name for d in found])
-    else:
-        # ⑥ 生產模式：派送至 Celery worker
-        from app.tasks.shredder_task import shred_document_task
-        shred_document_task.delay(doc.doc_id)
+    # ⑥ 呼叫 LLM 粉碎文件（同步，在 API 程序內執行）
+    await _shred_sync(db, doc.doc_id, doc.raw_text or "", [d.domain_name for d in found])
 
     # 重新查詢最新狀態，不依賴可能 detached 的 doc 物件
     result2 = await db.execute(
@@ -117,7 +112,7 @@ async def upload_document(
 async def _shred_sync(
     db: AsyncSession, doc_id: int, raw_text: str, domain_names: List[str]
 ) -> None:
-    """開發模式：在 API 程序內同步完成 AI 粉碎，無需 Celery。"""
+    """在 API 程序內完成 AI 粉碎，將結果寫入資料庫。"""
     async def _set_status(status: str, error: str | None = None) -> None:
         try:
             res = await db.execute(
